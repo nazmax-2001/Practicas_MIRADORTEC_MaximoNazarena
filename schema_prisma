@@ -1,0 +1,1277 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ── Enums ─────────────────────────────────────────────────────────────────────
+
+enum TipoUF {
+  OFICINA
+  SALA
+  ESPACIO
+  AULA
+  COWORKING
+  OTRO
+}
+
+enum Ala {
+  ESTE
+  OESTE
+  SIN_DEFINIR
+}
+
+enum CategoriaEntidad {
+  EMPRESA
+  CONSULTORA
+  ORGANIZACION
+  PROFESIONAL
+  MIRADOR_TEC
+}
+
+enum RolIntegrante {
+  RESPONSABLE
+  COLABORADOR
+  REFERENTE
+  PROFESIONAL
+}
+
+// El enum TipoEvento se convirtió en la tabla `TipoEvento` (al final del archivo):
+// la lista de tipos crece (son ~15 en la práctica) y ningún valor tiene una rama
+// propia en el código — sólo un nombre, un par de colores y su arte de flyer.
+// Mismo criterio que DOC_TIPOS/AVISO_TIPOS/NOVEDAD_TIPOS: sumar un tipo no
+// debería requerir una migración.
+
+enum TipoParticipacion {
+  PUBLICO
+  PRIVADO
+}
+
+// Quién puede ENTERARSE del evento. Ortogonal a `TipoParticipacion`, que dice
+// quién puede ASISTIR: el meet-up quincenal de empresas es PRIVADO (sólo entran
+// empresas y a quien ellas autoricen) y aun así se difunde — la comunidad tiene
+// que saber que existe. Lo que faltaba modelar es el otro caso: el examen a
+// jueces a puertas cerradas, o la visita del gobernador a firmar convenios.
+// Esos el equipo los tiene que organizar (sillas, links de la meet, sala) pero
+// no pueden salir ni a la app ni a las redes.
+//
+// Se llama `alcance` y no `difusion` porque `permiteDifusion(ev)` ya existe en
+// utils/flyerAutorizacion.js con otro significado (el organizador autorizó
+// difundir SUS imágenes) y las dos conviven dentro de avisosDe(). Un
+// casi-homónimo ahí es la misma trampa que cal-vis-CONFIRMADA vs cal-CONFIRMADO.
+// El rótulo que lee la secretaría sí dice "Difusión" (utils/eventoLabels.js).
+enum AlcanceEvento {
+  PUBLICO // se difunde: app, kiosko, pantallas del edificio, redes
+  INTERNO // sólo el equipo: calendario de lectura y panel de secretaría
+}
+
+// Modalidad del evento: presencial (asociado a una unidad funcional), online
+// (sin sala) o híbrida (presencial + transmisión online, mantiene sala).
+enum ModalidadEvento {
+  PRESENCIAL
+  ONLINE
+  HIBRIDA
+}
+
+// Nivel de público al que está dirigido el evento (qué tan especializado es).
+enum NivelPublico {
+  GENERAL
+  RELACIONADO
+  AVANZADO
+}
+
+// Qué paga quien asiste al evento. Independiente del tarifario del circuito
+// (eso es lo que Mirador le cobra al organizador por el espacio, en mTEC) y de
+// `participacion` / `requiere_inscripcion`. El campo es opcional: null =
+// todavía no se especificó, y en ese caso la app no afirma nada.
+enum Arancel {
+  GRATUITA
+  ARANCELADA
+  DONACION_VOLUNTARIA
+}
+
+// Eje temporal del evento, desacoplado de tipo_evento (semántico). Uno de los
+// defectos del Google Form era colapsar "qué es" con "cuánto dura"; acá se
+// separan para poder pedir un set plano de preguntas para todos los tipos.
+//
+// Los dos tramos del medio se agregaron después (2026-08-19): entre ~40 min y las
+// 4 h de media jornada no había dónde caer, y un evento de 2 h —probablemente el
+// más común— terminaba declarado como media jornada, que es el dato con el que la
+// secretaría reserva la sala.
+//
+// CHARLA_CORTA conserva su NOMBRE aunque su etiqueta ya no diga "charla": es la
+// clave que guardan los intakes y no hay foreign key que arrastre un rename. La
+// etiqueta cambió porque "Charla" pasó a ser un TIPO del catálogo
+// (utils/tiposEvento.js) y repetir el mismo nombre en los dos ejes es exactamente
+// lo que este enum vino a separar.
+//
+// Agregar un valor acá NO cuesta una migración de datos: en SQLite un enum de
+// Prisma no se materializa (cero CREATE TYPE en todo prisma/migrations) y
+// EventoIntake.duracion_formato es TEXT NOT NULL, así que el archivo de migración
+// sale vacío. Sacar o renombrar un valor sí costaría un UPDATE de las filas.
+enum DuracionFormato {
+  CHARLA_CORTA     // hasta 1 h
+  HASTA_2_HORAS    // 1–2 h
+  DE_2_A_4_HORAS   // 2–4 h
+  MEDIA_JORNADA    // 4–6 h
+  JORNADA_COMPLETA // 1 día
+  MULTI_DIA        // congreso 2+ días
+  CICLO_ENCUENTROS // cursos de varios encuentros
+  LUNCH_COCTEL
+}
+
+// Escala ÚNICA de asistentes estimados. El Google Form usaba 3 escalas
+// incompatibles según la rama; con una sola se pueden agregar los números.
+enum RangoAsistentes {
+  HASTA_25
+  DE_25_A_50
+  DE_50_A_100
+  MAS_DE_100
+}
+
+// Máquina de estados del circuito de eventos. Los 4 primeros son etapas del
+// circuito público/secretaría (previas a BORRADOR, no visibles en la app ni en
+// el admin Flutter); desde BORRADOR el evento lo toma el equipo de técnica/
+// comunicación. La visibilidad en la app se deriva del estado (deriveVisible).
+enum EstadoEvento {
+  INTERES       // Formulario 1 recibido (externo): bandeja de entrada sin gestionar
+  EN_EVALUACION // la secretaría "tomó" el interés y evalúa factibilidad (fecha/espacio/tipo)
+  EN_REVISION   // la secretaría armó la propuesta de espacio/fecha (el organizador la revisa)
+  CONFIRMADO    // el interesado aceptó la propuesta
+  RECHAZADO     // cierre cordial de la secretaría (no viable)
+  DESISTIDO     // el organizador dio de baja su propio evento (antes del Formulario 2)
+  BORRADOR      // ← desde acá lo ve el admin Flutter
+  PUBLICADO
+  CANCELADO
+  FINALIZADO
+  REPROGRAMADO
+}
+
+enum TipoPublicoVisita {
+  GENERAL
+  INSTITUCIONAL
+}
+
+enum DispositivoSolicitud {
+  WEB
+  TV_HALL
+  MOBILE
+  // La cargó el equipo a mano desde el panel: una visita pedida por teléfono,
+  // WhatsApp o en el mostrador. El canal concreto va en `comentarios` — modelarlo
+  // sería un enum para un dato que hoy nadie consulta.
+  PANEL
+}
+
+enum EstadoSolicitudVisita {
+  PENDIENTE
+  CONFIRMADA
+  CANCELADA
+}
+
+// Nivel educativo del grupo que visita. Sólo aplica a las solicitudes
+// INSTITUCIONAL: en las GENERAL queda null. `OTRO` existe porque la pestaña del
+// formulario es "Instituciones educativas u organizaciones" — una ONG o un club
+// no tiene nivel, y sin esta opción quedaría obligada a declarar uno falso.
+enum NivelEducativo {
+  INICIAL
+  PRIMARIO
+  SECUNDARIO
+  FORMACION_INTEGRAL
+  TERCIARIO
+  UNIVERSITARIO
+  OTRO
+}
+
+enum TipoArchivoAyvu {
+  GIF
+  SVG
+  LOTTIE
+  IMAGEN
+}
+
+enum LogoTargetAyvu {
+  CIRCULAR
+  WORDMARK
+  BOTH
+}
+
+// ── Innovación: postulación de proyectos ─────────────────────────────────────
+
+// Etapa del proyecto según Technology Readiness Level (form de innovación).
+enum EtapaTRL {
+  IDEA // Idea / investigación básica
+  PRUEBA_CONCEPTO // TRL 3-4
+  PROTOTIPO_FUNCIONAL // TRL 5-6
+  MVP_USUARIOS // TRL 7-8
+  MERCADO // TRL 9
+}
+
+enum TraccionClientes {
+  SIN_CLIENTES
+  PILOTO_MENOS_10
+  PAGOS_MENOS_10
+  MAS_10
+}
+
+enum TamanoEquipo {
+  SOLO
+  DOS
+  TRES_A_CINCO
+  MAS_DE_CINCO
+}
+
+enum VinculoER {
+  VIVE
+  TRABAJA_EMPRESA
+  ESTUDIO
+  OTRO
+  SIN_VINCULO
+}
+
+enum EstadoPostulacion {
+  PENDIENTE
+  EN_EVALUACION
+  ACEPTADA
+  RECHAZADA
+}
+
+// ── Models ────────────────────────────────────────────────────────────────────
+
+model UnidadFuncional {
+  id               Int      @id @default(autoincrement())
+  codigo_UF        String   @unique
+  nombre           String
+  icon             String?
+  tipo_uf          TipoUF
+  piso             Int
+  ala              Ala
+  indicaciones_ESC String?
+  indicaciones_ASC String?
+  video_escalera   String?
+  video_ascensor   String?
+  visible_en_app   Boolean  @default(true)
+  apto_eventos     Boolean  @default(false) // el espacio puede asignarse a eventos del circuito
+  capacidad        Int?     // capacidad máx sugerida de asistentes; null = "no declarado" (oficinas alquiladas no se relevan)
+  // Margen de armado y desarme, en minutos: cuánto tiempo ANTES y DESPUÉS del
+  // horario del evento queda el espacio efectivamente ocupado. El caso real es
+  // el Salón Auditorio, que se cobra "3 h + 1 de armado y desarme": el bloque a
+  // reservar son 4 h aunque el evento dure 3. Vive en el ESPACIO y no en el
+  // ítem del tarifario porque es un hecho del edificio (como `tiene_cabina` o
+  // `capacidad`), no una condición comercial — y es OCUPACIÓN, no precio: lo
+  // usa el motor de conflictos (utils/conflictos.js) y el calendario, no el
+  // cálculo del monto. Dos campos y no uno porque "1 h de armado y desarme" es
+  // ambiguo y la secretaría tiene que poder repartirla.
+  margen_previo_min    Int @default(0)
+  margen_posterior_min Int @default(0)
+  // El espacio tiene cabina de control de audio/video (hoy solo el Salón
+  // Auditorio 318). Habilita el requerimiento "operador de cabina" en el
+  // Formulario 2. Es una propiedad del ESPACIO y no un `if codigo === '318'` en
+  // el formulario: es un hecho del edificio, y si mañana otra sala tiene cabina
+  // se destilda un checkbox en vez de tocar código.
+  tiene_cabina              Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  entidades      Entidad[]
+  eventos        Evento[]
+  eventos_fechas EventoFecha[]
+  eventos_fechas_espacios EventoFechaEspacio[]
+  // Fila del tarifario que cotiza este espacio (0..1). El precio NO vive acá:
+  // ver ItemTarifario.
+  item_tarifario ItemTarifario?
+}
+
+model Entidad {
+  id             Int              @id @default(autoincrement())
+  uf_id          Int
+  unidad         UnidadFuncional  @relation(fields: [uf_id], references: [id])
+  nombre         String
+  categoria      CategoriaEntidad
+  email          String
+  website        String?
+  telefono       String?
+  logo           String?
+  logo_circular  String?
+  descripcion    String?
+  horario        String?
+  visible_en_app     Boolean          @default(true)
+  videocall_enabled  Boolean          @default(true)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  integrantes EntidadIntegrante[]
+}
+
+model Integrante {
+  id        Int      @id @default(autoincrement())
+  nombre    String
+  apellido  String
+  email     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  entidades   EntidadIntegrante[]
+  sesionesOtp OtpSession[]
+}
+
+model EntidadIntegrante {
+  id            Int           @id @default(autoincrement())
+  entidad_id    Int
+  integrante_id Int
+  rol           RolIntegrante
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  entidad    Entidad    @relation(fields: [entidad_id], references: [id])
+  integrante Integrante @relation(fields: [integrante_id], references: [id])
+
+  @@unique([entidad_id, integrante_id])
+}
+
+model OtpSession {
+  id             Int      @id @default(autoincrement())
+  email          String
+  otp_hash       String
+  oficina_codigo String?
+  expires_at     DateTime
+
+  integrante Integrante @relation(fields: [email], references: [email])
+}
+
+model Evento {
+  id                   Int              @id @default(autoincrement())
+  uf_id                Int?
+  unidad               UnidadFuncional? @relation(fields: [uf_id], references: [id])
+  nombre_organizador   String
+  titulo               String
+  subtitulo            String?
+  descripcion          String?
+  // Código del tipo, validado contra el catálogo `TipoEvento` en JS (utils/
+  // tiposEvento.js). NO hay foreign key a propósito: agregarla obligaría a SQLite
+  // a reescribir esta tabla entera, y hay datos en producción. Los códigos son
+  // los mismos que tenía el enum, así que Flutter y el panel no se enteran.
+  tipo_evento          String
+  fecha_inicio         DateTime?
+  hora_inicio          String?
+  fecha_fin            DateTime?
+  hora_fin             String?
+  // Las TRES piezas que puede subir el ORGANIZADOR. Viven en
+  // uploads/eventos/flyers/<id>/<formato>.jpg; lo que falte se genera solo
+  // (utils/flyerLayout.js → formatosDe). `imagen_vertical` es además lo que la
+  // app muestra en la ficha, y es la única de las tres que expone `mapEvento`
+  // con fallback a la pieza generada.
+  //
+  // `imagen_horizontal` existió y se eliminó una vez por no usarse; vuelve ahora
+  // que hay una puerta que efectivamente la escribe (el Formulario 2).
+  imagen_vertical      String?
+  imagen_horizontal    String?
+  imagen_muro          String?
+
+  // Cuáles de esas tres columnas guardan una pieza que SALIÓ DEL GENERADOR y no
+  // de una persona. CSV de formatos, mismo criterio que
+  // `flyer_autorizacion_piezas` (consultable por código sin interpretar prosa).
+  //
+  // Existe para poder regenerarlas sin tocar el arte ajeno. Materializar la
+  // pieza generada —el botón "Asignar el flyer generado" del admin— la congela:
+  // deja de recomponerse cuando cambian el título, la fecha o la sala. Sin esta
+  // columna, un "Regenerar flyers" no tendría cómo distinguir esa copia del
+  // flyer que subió el organizador, y pisaría su diseño.
+  //
+  // Se ESCRIBE al materializar y se LIMPIA en cuanto una persona sube o borra
+  // esa pieza: a partir de ahí la columna ya no guarda algo nuestro.
+  piezas_generadas     String?
+  estado_evento        EstadoEvento     @default(PUBLICADO)
+  participacion        TipoParticipacion @default(PUBLICO)
+  // Quién puede ENTERARSE. NO confundir con `participacion`, que es quién puede
+  // ASISTIR: el meet-up de empresas es PRIVADO y se difunde igual. Ver el enum.
+  //
+  // El default es PUBLICO —el statu quo— y no al revés, porque invertirlo dejaría
+  // invisible todo lo que ya existe. La red contra el error en la dirección cara
+  // (que un interno se publique) no es el default: son las dos barreras de
+  // routes/content.js y la marca 🔒 del panel.
+  alcance              AlcanceEvento    @default(PUBLICO)
+  modalidad            ModalidadEvento  @default(PRESENCIAL)
+  nivel_publico        NivelPublico     @default(GENERAL)
+  arancel              Arancel? // null = sin especificar (eventos previos al campo)
+  // Cuánto sale la entrada, INTERNO: `mapEvento` no lo expone y la app no lo
+  // muestra — el precio público sigue viviendo en el link de inscripción. Existe
+  // para que la secretaría y el equipo no salgan a preguntarlo por teléfono.
+  // Lo carga el organizador en el Formulario 2, obligatorio si eligió ARANCELADA
+  // (y se limpia si deja de serlo). Es TEXTO y no un número a propósito: los
+  // precios reales tienen tramos ("$5000 general / $3000 estudiantes"), y un
+  // Float obligaría a elegir uno solo y perder el resto.
+  arancel_monto        String?
+  requiere_inscripcion Boolean          @default(false)
+  cupo_maximo          Int?
+  link_inscripcion     String?
+  link_mas_informacion String?
+  // Link con más material que carga el organizador en el Formulario 2 (una
+  // carpeta de Drive, el programa definitivo, la web del evento).
+  //
+  // ⚠️ NO confundir con `link_mas_informacion`, que es PÚBLICO: ese se publica en
+  // la app y termina renderizado como un QR. Este es INTERNO — lo ve el equipo en
+  // el panel y en los avisos, y no sale por `mapEvento`.
+  //
+  // Es otra columna y no la misma de `EventoIntake.link_material` porque son dos
+  // links distintos en dos momentos distintos, y los dos se conservan: el del
+  // Formulario 1 es lo que la secretaría usó para armar la propuesta.
+  link_material        String?
+  // PÚBLICO: el teléfono del evento que se muestra en la app (`mapEvento` lo
+  // expone como `tel_contacto_evento`). Mismo par que `email_contacto` /
+  // `email_organizador`, y por el mismo motivo: hasta 2026-09-14 ésta era la
+  // ÚNICA columna de teléfono, así que el número personal que el organizador
+  // deja en el Formulario 1 para que lo contactemos terminaba publicado en la
+  // ficha del evento. Lo carga el ORGANIZADOR en el Formulario 2 y nadie más.
+  tel_contacto         String?
+  // INTERNO: el teléfono del organizador, el que usa el circuito para escribirle
+  // (el botón de WhatsApp del panel, la fila "Contacto del organizador" de los
+  // avisos). Lo fija el Formulario 1 ya normalizado a dígitos con el país
+  // adelante (`543434123456`), que es lo que espera `waLink()`. Nunca sale hacia
+  // la app. Gemelo exacto de `email_organizador`.
+  tel_organizador      String?
+  // PÚBLICO: el buzón del evento que se muestra en la app (`mapEvento` lo expone
+  // como `email_contacto_evento`). Lo carga el ORGANIZADOR en el Formulario 2 y
+  // nadie más lo escribe. `null` = todavía no lo decidió → la app no muestra
+  // nada, mismo criterio que `arancel`.
+  email_contacto       String?
+  // INTERNO: a quién le escribe el circuito (propuesta, avance del Formulario 2,
+  // rechazo, aviso de publicado). Lo fija el Formulario 1 y NO lo pisa nadie.
+  // Nunca sale hacia la app. Antes las dos cosas eran la MISMA columna, así que
+  // al mandar el Formulario 2 los avisos operativos pasaban a viajar al buzón
+  // público del evento — que puede ser una casilla de consultas que nadie de la
+  // organización mira.
+  email_organizador    String?
+  visible_en_app       Boolean          @default(true)
+  creado_en            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  // Circuito de eventos (una sola fuente de verdad: el mismo Evento evoluciona).
+  notas_internas         String? // notas de coordinación de la secretaría (no públicas)
+  propuesta_token_hash   String? // SHA-256 del token de aceptación (nunca el valor en claro)
+  propuesta_token_expira DateTime?
+  // Monto ACORDADO: cantidad de mTEC que la secretaría le cobra al organizador
+  // por el espacio. Es lo ÚNICO que ve el organizador y la palabra final: puede
+  // diferir del sugerido (descuentos por convenio, contraprestaciones, o extras
+  // que se suman a mano). Es la MISMA cantidad para todos — lo que varía por
+  // membresía al ecosistema es el TIPO DE CAMBIO (CotizacionMTEC), no esta
+  // cantidad. null = sin fijar. Se setea al proponer y viaja en la propuesta.
+  monto_mtec             Float?
+  // Monto SUGERIDO: lo que da el tarifario para estos espacios, horas y
+  // servicios (ver utils/tarifario.js). Se calcula y persiste al proponer.
+  // Existe para que la diferencia con el acordado sea visible y auditable: sin
+  // esto no queda registro de que a un organizador se le cobró distinto de lo
+  // que dice el tarifario, ni de cuánto.
+  monto_mtec_sugerido    Float?
+  // Por qué el acordado difiere del sugerido. OBLIGATORIO cuando difieren (lo
+  // valida la API). INTERNO: no sale del panel, igual que notas_internas y
+  // sin_costo_motivo. Si hay algo que explicarle al organizador va en
+  // propuesta_mensaje, que sí viaja en el correo.
+  monto_justificacion    String?
+  // Ítems del tarifario que usa este evento y que NO son una UnidadFuncional:
+  // servicios (limpieza, operador, catering) y espacios sin UF (stands,
+  // explanada, paseo de las estatuas). Alimentan el monto sugerido Y la fila
+  // "Otros espacios y servicios" del calendario.
+  items_tarifario        EventoItemTarifario[]
+  // Excepción explícita: el evento NO se le cobra al organizador (acuerdos de la
+  // Fundación, casos puntuales). Es un campo aparte y no "monto_mtec = 0" ni
+  // "monto_mtec = null" porque `null` ya significa "todavía no se fijó": sin esto,
+  // un evento gratis por acuerdo y uno sin cotizar se ven idénticos y no queda
+  // registro de por qué no se cobró. El motivo es OBLIGATORIO cuando está en true
+  // (lo valida la API): es una excepción a la regla y tiene que poder auditarse
+  // después. Los dos son INTERNOS — al organizador no se le muestra nada sobre
+  // costos (ver enviarPropuesta / GET propuesta en routes/eventos.js).
+  sin_costo              Boolean  @default(false)
+  sin_costo_motivo       String?
+  // Requerimientos técnicos que pide el organizador en el Formulario 2 (M2M con
+  // el catálogo) + lo que no entra en la lista. El texto libre existe porque la
+  // lista nunca va a estar completa, y una necesidad no declarada se descubre el
+  // día del evento.
+  requerimientos         EventoRequerimiento[]
+  requerimientos_obs     String?
+  // Acuse del correo de propuesta. El envío se confirma contra el SMTP antes de
+  // responderle al panel: sin esto, un fallo de envío quedaba sólo en el log del
+  // server y la secretaría creía haber avisado al organizador (que nunca recibió
+  // nada). enviado_en = último envío aceptado por el SMTP; error = motivo del
+  // último fallo (se limpia al primer envío exitoso). Los dos en null = todavía
+  // no se intentó.
+  propuesta_mail_enviado_en DateTime?
+  propuesta_mail_error      String?
+
+  // Última vez que el organizador guardó el Formulario 2 SIN enviarlo ("Guardar y
+  // seguir después"). Juntar los datos finales —título definitivo, descripción,
+  // links, flyer— lleva más de una sentada, y hasta ahora cerrar la pestaña
+  // perdía todo lo tipeado.
+  //
+  // Los datos del borrador NO viven acá: se escriben en las columnas reales del
+  // evento (mismo criterio que el flyer, que se persiste al subirlo, y que el
+  // borrador de propuesta de la secretaría). Esta columna sólo dice CUÁNDO, y
+  // hace dos trabajos con un solo campo:
+  //   1. Marcador en el panel: "Formulario 2 en curso, última edición el ...",
+  //      para saber a quién hay que apurar.
+  //   2. Anti-spam del correo "guardamos tu avance": el handler lee el valor
+  //      anterior antes de pisarlo, y sólo manda si pasaron más de 6 h.
+  // Se queda con la fecha del último borrador aunque después se envíe el
+  // formulario: el panel deja de mostrarlo porque el estado ya no es CONFIRMADO.
+  f2_borrador_en            DateTime?
+
+  // ── Autorización para difundir las piezas generadas ────────────────────────
+  // Difundir una pieza que el organizador NO dibujó necesita su permiso, y ese
+  // permiso necesita constancia fechada. Lo que habilita es sólo la difusión
+  // EXTERNA (muro de Instagram y pantallas del edificio); el vertical de la app
+  // se genera siempre, porque es el evento que él mismo pidió publicar ahí.
+  //
+  // Se guarda el TEXTO LITERAL que leyó y no un booleano, por la misma razón que
+  // EventoPropuestaLinea guarda texto y no referencias: si mañana cambia la
+  // redacción del permiso, el comprobante tiene que seguir diciendo lo que decía.
+  // `piezas` es el CSV de formatos que cubre, para poder consultarlo por código
+  // sin interpretar prosa.
+  //
+  // Se re-declara en CADA envío del Formulario 2 y el checkbox no se precarga
+  // nunca (ver utils/flyerAutorizacion.js). No aplica a los eventos cargados
+  // directo desde Flutter: ahí no hay organizador que firme nada.
+  flyer_autorizacion_en     DateTime?
+  flyer_autorizacion_texto  String?
+  flyer_autorizacion_piezas String?
+
+  // ── Sellado de la propuesta (comprobante para el organizador) ──────────────
+  // Lo que se le cotizó a ESTE organizador queda congelado al enviarle la
+  // propuesta: si después se actualiza la cotización mTEC o se sube un tarifario
+  // nuevo, él sigue viendo (y se le respeta) el precio que se le prometió.
+  // Antes los pesos se recalculaban con la cotización vigente en cada visita, lo
+  // que hacía que el monto de una propuesta ya enviada cambiara solo.
+  // Texto libre de la secretaría al organizador, en el correo de propuesta y en
+  // la página del link. Dos usos según lo que haya pedido en el Formulario 1:
+  // explicar POR QUÉ se le cambia la fecha/espacio que pidió, o —si vino abierto
+  // a sugerencias— fundamentar la que se le propone.
+  propuesta_mensaje      String?
+
+  propuesta_sellada_en   DateTime?
+  // Tipo de cambio aplicado (pesos por 1 mTEC, ya resuelto según la membresía).
+  // Se guarda el VALOR, no solo la referencia: el historial de cotizaciones se
+  // puede borrar desde el panel y el comprobante tiene que sobrevivir a eso.
+  propuesta_valor_ars    Float?
+  // Referencia informativa a la cotización usada (trazabilidad; puede quedar
+  // colgada si esa entrada del historial se elimina).
+  propuesta_cotizacion_id Int?
+  // Versiones EXACTAS de los PDFs que se le adjuntaron/linkearon.
+  propuesta_docs EventoPropuestaDoc[]
+  // Desglose CONGELADO de cómo se llegó al monto sugerido de esta propuesta.
+  // Se reemplaza entero al re-proponer, igual que propuesta_docs. No se
+  // recalcula: si el tarifario cambia, el número dejaría de coincidir con lo que
+  // se le prometió al organizador — misma razón por la que existe
+  // propuesta_valor_ars.
+  propuesta_lineas EventoPropuestaLinea[]
+
+  intake       EventoIntake?
+  transiciones EventoTransicion[]
+  // Avisos internos ya enviados (uno por tipo): el circuito notifica a cada
+  // equipo UNA sola vez por evento. Ver utils/avisosEvento.js.
+  avisos       EventoAviso[]
+  // Material que adjuntó el organizador en el Formulario 1 (programa,
+  // presupuesto, flyer de la edición anterior). Ver EventoAdjunto.
+  adjuntos     EventoAdjunto[]
+
+  // Multi-fecha / recurrencia: ocurrencias materializadas (1:N). Todo evento con
+  // fecha tiene ≥1 fila; los campos fecha_inicio/fecha_fin/hora_* de arriba son
+  // ESPEJO derivado (mín/máx de estas ocurrencias), recalculado al guardar, para
+  // no romper app/kiosko/listado/mapEvento. Ver utils/eventoFechas.js.
+  fechas EventoFecha[]
+
+  @@unique([titulo, fecha_inicio])
+}
+
+// Ocurrencia concreta de un evento (una fecha con su horario y espacio). El
+// generador de recurrencia expande a una lista editable de estas filas; los de
+// una sola fecha tienen exactamente 1. uf_id por ocurrencia (Decisión A: mismo
+// espacio en todas por ahora, override por fecha queda fácil a futuro).
+model EventoFecha {
+  id          Int              @id @default(autoincrement())
+  evento_id   Int
+  evento      Evento           @relation(fields: [evento_id], references: [id], onDelete: Cascade)
+  fecha       DateTime
+  hora_inicio String?
+  hora_fin    String?
+  uf_id       Int?
+  unidad      UnidadFuncional? @relation(fields: [uf_id], references: [id])
+  orden       Int              @default(0)
+  creado_en   DateTime         @default(now())
+
+  // Set completo de espacios de la ocurrencia (multi-UF). uf_id de arriba es la
+  // primaria/espejo (display compacto + legacy); esta unión guarda TODAS las UFs
+  // incluida la primaria. Un evento choca con otro si comparten ≥1 UF en la misma
+  // fecha con solapamiento horario. Ver utils/eventoFechas.js.
+  espacios    EventoFechaEspacio[]
+
+  @@index([evento_id])
+  @@index([uf_id, fecha])
+}
+
+// Unión M2M ocurrencia ↔ espacio: el conjunto de UFs atómicas que ocupa una
+// ocurrencia. Backfill idempotente desde EventoFecha.uf_id. Cascade al borrar la
+// ocurrencia (deleteMany en los helpers limpia esta unión automáticamente).
+model EventoFechaEspacio {
+  evento_fecha_id Int
+  uf_id           Int
+  evento_fecha    EventoFecha     @relation(fields: [evento_fecha_id], references: [id], onDelete: Cascade)
+  unidad          UnidadFuncional @relation(fields: [uf_id], references: [id])
+
+  @@id([evento_fecha_id, uf_id])
+  @@index([uf_id])
+}
+
+// Qué versión de cada documento institucional se le envió a un organizador en su
+// propuesta. Es una unión (y no dos columnas fijas en Evento) porque DOC_TIPOS es
+// extensible: sumar un tipo nuevo no debería requerir migrar Evento.
+// El correo linkea ESTAS versiones, no la vigente: si la vigente cambia, el
+// organizador tiene que seguir viendo el tarifario con el que se le cotizó.
+model EventoPropuestaDoc {
+  evento_id     Int
+  documento_id  Int
+  evento        Evento                 @relation(fields: [evento_id], references: [id], onDelete: Cascade)
+  documento     DocumentoInstitucional @relation(fields: [documento_id], references: [id])
+
+  @@id([evento_id, documento_id])
+  @@index([documento_id])
+}
+
+// Datos que SOLO importan en la etapa INTERES (regla "cada dato en su etapa"):
+// no ensucian el núcleo Evento y se conocen únicamente al enviar el Formulario 1.
+// Relación 1:1 con Evento; se borra en cascada si el evento se elimina.
+model EventoIntake {
+  id                    Int             @id @default(autoincrement())
+  evento_id             Int             @unique
+  evento                Evento          @relation(fields: [evento_id], references: [id], onDelete: Cascade)
+  pertenece_ecosistema  Boolean         @default(false)
+  persona_a_cargo       String
+  coorganizadores       String? // texto libre en Etapa 1; tabla de contactos en etapas siguientes
+  tematica              String
+  relacion_tecnologia   String // relación del evento con la tecnología e innovación
+  asistentes_estimados  RangoAsistentes
+  duracion_formato      DuracionFormato
+  // Lo que el organizador DECLARÓ en el Formulario 1. `Evento.modalidad` es la
+  // modalidad VIGENTE (la editan el panel y el Formulario 2); ésta es el hecho
+  // histórico de esta etapa, igual que `fecha_tentativa` o `preferencia_agenda`.
+  //
+  // Nullable A PROPÓSITO: null = evento anterior a este campo. Es el único
+  // marcador que distingue "declaró PRESENCIAL" del @default de Prisma en
+  // `Evento.modalidad` — sin él, precargar el radio del Formulario 2 sería
+  // presentar un default como si fuera una respuesta que alguien dio.
+  modalidad             ModalidadEvento?
+  // Lo que el organizador DECLARÓ en el Formulario 1, igual que `modalidad` de
+  // acá arriba. Nullable: null = no lo declaró (evento anterior a este campo,
+  // alta directa de Flutter, o JS del formulario cacheado que todavía no lo
+  // manda). `Evento.alcance` es el vigente y lo manda el equipo.
+  alcance               AlcanceEvento?
+  periodicidad          String? // si es recurrente
+  necesita_pantalla     Boolean         @default(false)
+  necesita_computadoras Boolean         @default(false)
+  necesita_varios_esp   Boolean         @default(false)
+  // Aparte de las necesidades técnicas (que no se cobran): la limpieza se abona
+  // por separado, así que la secretaría necesita el dato ANTES de cotizar el
+  // espacio. No se parametriza el precio: se suma a mano al monto en mTEC.
+  necesita_limpieza     Boolean         @default(false)
+  fecha_tentativa       String? // preferencia orientativa en texto libre (ver preferencia_agenda)
+  // Qué eligió el organizador en el Formulario 1: si trae fecha/horario/espacio
+  // pensados o si se deja guiar. CON_PREFERENCIA materializa las ocurrencias
+  // pedidas en EventoFecha (el evento sigue en INTERES, que no ocupa sala: puede
+  // pedir algo ya tomado y lo resuelve la secretaría). ABIERTO no declara nada.
+  preferencia_agenda    PreferenciaAgenda @default(ABIERTO)
+  // Link con más material (una carpeta de Drive, la web del evento, la edición
+  // anterior). Es la otra mitad de los adjuntos: lo que no entra como archivo
+  // —una carpeta, un video, algo de 400 MB— entra por acá. Se valida con la
+  // misma normalizarLinks() que los links del Formulario 2.
+  link_material         String?
+  creado_en             DateTime        @default(now())
+}
+
+// Material que el organizador adjuntó en el Formulario 1: el programa de las
+// jornadas, el presupuesto, el flyer de la edición anterior, una carta de
+// auspicio. Hasta 3 por evento, opcional.
+//
+// Es una tabla y no tres columnas en EventoIntake porque son 1:N de verdad y
+// porque cada fila necesita su propio token de descarga.
+//
+// Su ESCRITURA es la primera puerta anónima del proyecto: cualquiera con el
+// formulario público escribe acá. Ver utils/adjuntos.js (qué entra) y
+// utils/adjuntoArchivo.js (dónde y cómo se guarda).
+model EventoAdjunto {
+  id        Int      @id @default(autoincrement())
+  evento_id Int
+  evento    Evento   @relation(fields: [evento_id], references: [id], onDelete: Cascade)
+  // Ruta relativa: /uploads/eventos/adjuntos/<eventoId>/<uuid>.bin — SIN la
+  // extensión real, a propósito (ver utils/adjuntoArchivo.js).
+  archivo   String
+  // El nombre lindo, ya saneado al guardar: es lo que muestra la ficha y lo que
+  // viaja en el Content-Disposition de la descarga.
+  filename  String
+  // Credencial del link de descarga. Con un id autoincremental se podría
+  // enumerar el material de TODOS los eventos, incluidos los internos y los
+  // rechazados — y esto es material de un tercero, no un PDF institucional.
+  token     String   @unique
+  bytes     Int
+  creado_en DateTime @default(now())
+  // De qué formulario vino: 'F1' (la declaración de interés) o 'F2' (los datos
+  // finales, después de aceptar la propuesta). String validado en JS y no enum de
+  // Prisma, mismo criterio que DOC_TIPOS / AVISO_TIPOS.
+  //
+  // MISMA TABLA y no una nueva: el organizador AGREGA material en el F2 sin pisar
+  // lo que ya mandó, y así la descarga por token, el saneado del nombre, la
+  // carpeta en disco y el borrado en cascada se reusan sin tocar una línea. El
+  // panel los muestra separados por etapa.
+  etapa     String   @default("F1")
+  // ⚠️ Va ÚLTIMA a propósito: declarada antes de `creado_en`, `migrate dev`
+  // genera un RedefineTables (crear tabla nueva, copiar, DROP, renombrar) sólo
+  // por el orden físico. Al final, genera un ADD COLUMN limpio.
+
+  @@index([evento_id])
+}
+
+enum PreferenciaAgenda {
+  CON_PREFERENCIA
+  ABIERTO
+}
+
+// Catálogo de requerimientos técnicos del Formulario 2: lo que el organizador le
+// pide al equipo de técnica (video con audio, proyector, micrófonos, streaming…).
+// Catálogo sembrado y M2M, no una columna booleana por ítem en Evento: la lista
+// crece con el tiempo y sumar una necesidad nueva no debería requerir migrar.
+// Mismo patrón que AreaTecnologica/Necesidad de innovación — se edita en
+// [prisma/seedRequerimientos.js](seedRequerimientos.js) y se siembra al boot.
+model RequerimientoTecnico {
+  id              Int      @id @default(autoincrement())
+  slug            String   @unique
+  nombre          String
+  orden           Int      @default(0)
+  // Solo se ofrece si alguno de los espacios del evento tiene cabina de control
+  // (`UnidadFuncional.tiene_cabina`): pedir un operador de cabina en una sala que
+  // no tiene cabina no es una opción, es una confusión.
+  requiere_cabina Boolean  @default(false)
+  activo          Boolean  @default(true)
+  eventos         EventoRequerimiento[]
+}
+
+model EventoRequerimiento {
+  evento_id        Int
+  requerimiento_id Int
+  evento           Evento               @relation(fields: [evento_id], references: [id], onDelete: Cascade)
+  requerimiento    RequerimientoTecnico @relation(fields: [requerimiento_id], references: [id], onDelete: Cascade)
+
+  @@id([evento_id, requerimiento_id])
+  @@index([requerimiento_id])
+}
+
+// Log de auditoría de las transiciones de estado del evento (1:N). Se empieza a
+// usar desde INTERES; registra estado anterior/nuevo, quién lo disparó y una nota.
+//
+// `tipo` es lo que convierte una fila de este log en una NOVEDAD de la campanita
+// del panel (utils/novedades.js). Es opcional a propósito: las transiciones que
+// dispara la propia secretaría (tomar un interés, proponer, rechazar, editar) lo
+// dejan en null y por eso no aparecen — no es novedad lo que uno acaba de hacer.
+//
+// Existe como columna, y no se deduce de (actor, estado_anterior, estado_nuevo)
+// ni del prefijo de `nota`, porque hay pares indistinguibles: "pidió cambios" y
+// "pidió un link nuevo" son los dos ORGANIZADOR con EN_REVISION → EN_REVISION.
+// Y `nota` es texto para leer, no para parsear: cambiar su redacción no puede
+// reclasificar una novedad. String validado en JS (NOVEDAD_TIPOS) y no enum de
+// Prisma — mismo criterio que DOC_TIPOS / AVISO_TIPOS / CONFIG_CLAVES: sumar una
+// novedad tiene que ser agregar un string, sin migrar.
+model EventoTransicion {
+  id              Int      @id @default(autoincrement())
+  evento_id       Int
+  evento          Evento   @relation(fields: [evento_id], references: [id], onDelete: Cascade)
+  estado_anterior String?
+  estado_nuevo    String
+  actor           String // 'PUBLICO' | 'ORGANIZADOR' | 'SECRETARIA' | 'SISTEMA' | 'ADMIN' | email
+  nota            String?
+  tipo            String? // novedad para el panel; validado en JS (NOVEDAD_TIPOS, utils/novedades.js)
+  creado_en       DateTime @default(now())
+
+  // El feed de la campanita filtra por `tipo` y ordena por fecha: sin esto es un
+  // full scan del log entero cada 2 minutos, y este log sólo crece.
+  @@index([tipo, creado_en])
+}
+
+// Aviso interno del circuito ya enviado. Existe para no repetirlos: cada equipo
+// (Point, técnica, comunicación, secretaría, info) se entera UNA vez por evento,
+// aunque el estado vuelva atrás y se re-publique.
+//
+// Es una tabla y no una columna `aviso_publicado_en` porque la lista de avisos va
+// a crecer (señalética, reservas/OpenKey, estados terminales): sumar uno tiene que
+// ser agregar un string a AVISO_TIPOS, sin migrar. Por eso `tipo` es String
+// validado en JS y no un enum de Prisma — mismo criterio que DOC_TIPOS.
+//
+// Tampoco alcanza con mirar EventoTransicion: routes/content.js (el admin Flutter,
+// que es la puerta principal a PUBLICADO) actualiza el estado sin registrar
+// transiciones, así que el historial diría "nunca estuvo publicado" siempre.
+//
+// La fila se RESERVA ANTES de mandar y se borra si el envío falla. El @@unique es
+// lo único que hace atómico el "¿ya lo mandé?": el envío tarda ~10 s contra Ferozo,
+// y con un findUnique previo dos corridas concurrentes entraban las dos por ese
+// hueco. Un correo que falló se reintenta en el próximo cambio de estado, y uno
+// que salió no se duplica.
+//
+// De esa atomicidad depende que RESERVA_ESPACIO pueda emitirse desde BORRADOR y
+// desde PUBLICADO con el mismo tipo y salir una sola vez.
+model EventoAviso {
+  id         Int      @id @default(autoincrement())
+  evento_id  Int
+  evento     Evento   @relation(fields: [evento_id], references: [id], onDelete: Cascade)
+  tipo       String // validado en JS contra AVISO_TIPOS (utils/avisosEvento.js)
+  enviado_a  String
+  enviado_en DateTime @default(now())
+
+  @@unique([evento_id, tipo])
+}
+
+// Documentos institucionales versionados (tarifario de precios, catálogo de
+// espacios, extensible). Se adjuntan a los correos del circuito. Al subir una
+// versión nueva de un tipo, la anterior queda inactiva pero NO se borra
+// (historial). La vigente por tipo es la de `activo = true`.
+model DocumentoInstitucional {
+  id         Int      @id @default(autoincrement())
+  tipo       String // 'TARIFARIO' | 'ESPACIOS' | 'PROTOCOLO' (extensible)
+  archivo    String // ruta pública /uploads/docs/<uuid>.pdf
+  filename   String // nombre visible con fecha, ej: tarifario_miradortec_2026-07-22.pdf
+  subido_por String?
+  activo     Boolean  @default(true)
+  creado_en  DateTime @default(now())
+
+  // Propuestas que linkean ESTA versión. Mientras existan, la versión no se
+  // puede borrar: es el comprobante del precio que se le prometió a esa gente.
+  propuestas EventoPropuestaDoc[]
+}
+
+// Cotización de la moneda interna "mTEC": cuántos pesos ($) equivale 1 mTEC. El
+// tarifario de espacios se expresa en mTEC; esta tabla guarda la conversión.
+// DOS valores: el tipo de cambio es distinto según si el evento pertenece al
+// ecosistema Mirador TEC (`EventoIntake.pertenece_ecosistema`) o no — los de
+// afuera pagan un tipo de cambio peor por el mismo mTEC. La CANTIDAD de mTEC
+// que se cobra por un espacio (Evento.monto_mtec) es la MISMA para todos y sale
+// del tarifario en PDF; lo único que varía por membresía es esta conversión.
+// La cotización vigente es la de `creado_en` más reciente; se conserva el
+// historial (ABM desde el panel de secretaría, modal "Cotización mTEC").
+model CotizacionMTEC {
+  id                      Int      @id @default(autoincrement())
+  valor_ars_ecosistema    Float // pesos por 1 mTEC, evento del ecosistema
+  valor_ars_no_ecosistema Float // pesos por 1 mTEC, evento fuera del ecosistema
+  nota                    String?
+  actualizado_por         String?
+  creado_en               DateTime @default(now())
+}
+
+// ── Tarifario de eventos ─────────────────────────────────────────────────────
+// Catálogo de lo que la secretaría le cobra al organizador, en mTEC. Reemplaza
+// al viejo `UnidadFuncional.mtec_valor` (un Float suelto, sin unidad de cobro y
+// sin lugar para lo que no es un espacio del edificio).
+//
+// Tres cosas que el modelo anterior no podía representar y que el tarifario real
+// sí tiene:
+//   1. El precio de un CONJUNTO de salas no es la suma de sus partes
+//      (Camalote + Timbó = 80, no 90) → TarifaCombinada.
+//   2. La unidad de cobro cambia por espacio: por hora, por bloque de 2 h o de
+//      4 h, o por evento → UnidadCobro + bloque_horas.
+//   3. Hay ítems tarifables que no son una UnidadFuncional: señalética,
+//      catering, limpieza, operador, stands, explanada → uf_id opcional.
+//
+// Fuera del catálogo, a propósito: los alquileres mensuales (coworkings) y por
+// metro escalonado (depósito). No son eventos y el circuito no los cotiza; se
+// siguen mirando en el PDF.
+
+enum TipoItemTarifario {
+  ESPACIO // una sala, un stand, la explanada… ocupa lugar físico
+  SERVICIO // limpieza, operador de cabina, catering, señalética
+}
+
+// Enums de Prisma y no strings validados en JS (a diferencia de DOC_TIPOS /
+// AVISO_TIPOS / CONFIG_CLAVES): esos son listas extensibles donde sumar un valor
+// no debería requerir migrar, y acá cada valor tiene una RAMA PROPIA en el motor
+// de cálculo (utils/tarifario.js) — sumar uno exige tocar código igual. Mismo
+// criterio que Arancel o PreferenciaAgenda.
+enum UnidadCobro {
+  HORA // se cobra por hora (comenzada)
+  BLOQUE // se cobra por bloque de `bloque_horas` (2 o 4) horas comenzadas
+  EVENTO // precio único, no depende de la duración
+}
+
+model ItemTarifario {
+  id     Int               @id @default(autoincrement())
+  nombre String
+  tipo   TipoItemTarifario
+  // Vínculo OPCIONAL con el espacio real del edificio. Presente = este ítem
+  // cotiza esa UF y los espacios del evento lo encuentran por acá. Ausente =
+  // ítem tarifable que no es una unidad funcional (ver arriba); esos no reservan
+  // sala, pero sí se muestran juntos en la fila "Otros espacios y servicios" del
+  // calendario, para que cada área vea al organizar la semana si hay que poner
+  // señalética o si hay algo en el paseo de las estatuas.
+  uf_id  Int?              @unique
+  unidad UnidadFuncional?  @relation(fields: [uf_id], references: [id])
+
+  unidad_cobro UnidadCobro @default(HORA)
+  bloque_horas Int? // solo si unidad_cobro = BLOQUE (2 o 4)
+  minimo_horas Int? // mínimo facturable (Churquí 2 h, Quincho 4 h)
+  // null = "no declarado", NUNCA 0: un precio sin cargar tiene que avisar, no
+  // cotizar gratis. `mtec_valor_actualizado_en` es un timestamp DEDICADO (solo
+  // se sella si el valor cambió de verdad), mismo criterio que tenía la UF.
+  mtec_valor                Float?
+  mtec_valor_actualizado_en DateTime?
+  nota                      String? // aclaraciones del tarifario que no entran en un número
+  orden                     Int     @default(0)
+  // Se desactiva, no se borra: los eventos que ya lo cotizaron conservan el
+  // vínculo (mismo criterio que RequerimientoTecnico.activo).
+  activo                    Boolean @default(true)
+  creado_en                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  combinaciones TarifaCombinadaItem[]
+  eventos       EventoItemTarifario[]
+}
+
+// El precio de un CONJUNTO de ítems, que no es derivable de los individuales:
+// las tres aulas de capacitación valen 110 juntas y 130 sumadas por separado.
+// Por eso es una tabla y no un descuento porcentual: el tarifario publica el
+// número del combo, no la regla que lo genera.
+model TarifaCombinada {
+  id           Int         @id @default(autoincrement())
+  nombre       String
+  mtec_valor   Float
+  unidad_cobro UnidadCobro @default(HORA)
+  bloque_horas Int?
+  minimo_horas Int?
+  activo       Boolean     @default(true)
+  creado_en    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  items TarifaCombinadaItem[]
+}
+
+model TarifaCombinadaItem {
+  combinacion_id Int
+  item_id        Int
+  combinacion    TarifaCombinada @relation(fields: [combinacion_id], references: [id], onDelete: Cascade)
+  item           ItemTarifario   @relation(fields: [item_id], references: [id], onDelete: Cascade)
+
+  @@id([combinacion_id, item_id])
+  @@index([item_id])
+}
+
+// Ítems del tarifario que usa un evento y que no son una UnidadFuncional. Es la
+// SELECCIÓN (editable): alimenta el cálculo del sugerido y la fila "Otros
+// espacios y servicios" del calendario. No lleva fecha — el ítem aplica al
+// evento entero y se muestra en todas sus ocurrencias; pedirle a la secretaría
+// que asigne la señalética a una fecha puntual es trabajo extra para un dato que
+// nadie mira por día.
+model EventoItemTarifario {
+  evento_id Int
+  item_id   Int
+  cantidad  Float         @default(1)
+  evento    Evento        @relation(fields: [evento_id], references: [id], onDelete: Cascade)
+  item      ItemTarifario @relation(fields: [item_id], references: [id])
+
+  @@id([evento_id, item_id])
+  @@index([item_id])
+}
+
+// Una línea del desglose CONGELADO de la propuesta: cómo se llegó al monto
+// sugerido que se le cotizó a ESTE organizador. Se escribe al sellar la
+// propuesta y se reemplaza entera al re-proponer.
+//
+// Es una tabla de líneas y no un JSON blob, en la línea del resto del proyecto
+// (EventoPropuestaDoc, EventoRequerimiento): se renderiza directo en el panel y
+// es consultable. Guarda TEXTO, no referencias al ítem: si mañana el ítem se
+// renombra o se le cambia el precio, el comprobante tiene que seguir diciendo lo
+// que decía el día que se envió — mismo criterio que propuesta_valor_ars, que
+// guarda el valor y no solo el id de la cotización.
+model EventoPropuestaLinea {
+  id        Int     @id @default(autoincrement())
+  evento_id Int
+  evento    Evento  @relation(fields: [evento_id], references: [id], onDelete: Cascade)
+  orden     Int     @default(0)
+  concepto  String // "Sala Camalote + Sala Timbó" / "Servicio de limpieza"
+  detalle   String? // "12/08 · 3 h · combinación 'Dos aulas' · 80 mTEC/h"
+  mtec      Float
+
+  @@index([evento_id])
+}
+
+// Ajustes del circuito que la secretaría edita desde su panel (hoy: el WhatsApp
+// de contacto que va en los correos al organizador). Key-value a propósito y no
+// una tabla por ajuste: sumar uno nuevo no debería requerir una migración, igual
+// que sumar un tipo a DOC_TIPOS. Las claves válidas se validan en JS
+// (CONFIG_CLAVES en routes/eventos.js). Sin historial: a diferencia de la
+// cotización o el tarifario, acá no hay nada que respaldar hacia atrás — vale el
+// valor vigente.
+model ConfiguracionCircuito {
+  clave           String   @id
+  valor           String
+  actualizado_por String?
+  actualizado_en  DateTime @updatedAt
+}
+
+model SolicitudVisita {
+  id                     Int                   @id @default(autoincrement())
+  tipo_publico           TipoPublicoVisita
+  dispositivo_solicitud  DispositivoSolicitud  @default(WEB)
+  nombre_apellido        String
+  email_contacto         String
+  telefono_contacto      String?
+  institucion            String?
+  nivel_educativo        NivelEducativo?       // sólo en INSTITUCIONAL; null en GENERAL y en las filas previas a este campo
+  fecha_solicitud        DateTime              @default(now())
+  fecha_visita           DateTime?
+  cantidad_participantes Int                   @default(1)
+  comentarios            String?
+  estado                 EstadoSolicitudVisita @default(PENDIENTE)
+  encuesta_enviada_en    DateTime?
+  recordatorio_enviado_en DateTime?
+  // Número de versión de la invitación de calendario (.ics) de ESTA visita.
+  // Un cliente de calendario IGNORA una actualización cuyo SEQUENCE no sea mayor
+  // al que ya tiene: sin esto, reprogramar y reenviar la confirmación dejaba al
+  // visitante con la fecha vieja agendada, en silencio. Se incrementa en cada
+  // envío de confirmación o cancelación.
+  ics_secuencia          Int                   @default(0)
+  creado_en              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+}
+
+// Postulación de un proyecto de innovación al Comité de Admisión de MiradorTEC.
+// Los campos categóricos son enums o relaciones M2M con catálogos para poder
+// analizarlos (antecedentes, matching, estadísticas) sin parsear texto libre.
+model ProyectoInnovacion {
+  id                Int                @id @default(autoincrement())
+  nombre            String // máx 60
+  tagline           String // máx 120
+  problema          String // máx 400
+  solucion          String // máx 400
+  cliente_principal String // máx 120
+  etapa             EtapaTRL
+  traccion          TraccionClientes?
+  referente_nombre  String
+  referente_email   String
+  // Guardado en formato wa.me (`543434123456`), el que arma utils/contacto.js.
+  // Nullable aunque el formulario lo exija: las postulaciones anteriores a este
+  // campo no lo tienen y un NOT NULL obligaría a inventarles un valor. La
+  // obligación vive en la puerta del POST, que es donde corresponde.
+  referente_whatsapp String?
+  tamano_equipo     TamanoEquipo?
+  vinculo_er        VinculoER?
+  area_otra         String? // texto libre cuando marca "Otra" en áreas
+  link_material     String? // pitch deck / drive / notion
+  estado            EstadoPostulacion  @default(PENDIENTE)
+  nota_resolucion   String? // comentario del comité al resolver
+  resuelto_en       DateTime?
+  creado_en         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  areas       ProyectoArea[]
+  necesidades ProyectoNecesidad[]
+}
+
+// Catálogo de áreas tecnológicas (AgTech, IA/ML, HealthTech, ...).
+model AreaTecnologica {
+  id     Int    @id @default(autoincrement())
+  slug   String @unique
+  nombre String
+  orden  Int    @default(0)
+
+  proyectos ProyectoArea[]
+}
+
+model ProyectoArea {
+  proyectoId Int
+  areaId     Int
+
+  proyecto ProyectoInnovacion @relation(fields: [proyectoId], references: [id], onDelete: Cascade)
+  area     AreaTecnologica    @relation(fields: [areaId], references: [id], onDelete: Cascade)
+
+  @@id([proyectoId, areaId])
+}
+
+// Catálogo de necesidades ("¿Qué buscás en MiradorTEC?").
+model Necesidad {
+  id     Int    @id @default(autoincrement())
+  slug   String @unique
+  nombre String
+  orden  Int    @default(0)
+
+  proyectos ProyectoNecesidad[]
+}
+
+model ProyectoNecesidad {
+  proyectoId  Int
+  necesidadId Int
+
+  proyecto  ProyectoInnovacion @relation(fields: [proyectoId], references: [id], onDelete: Cascade)
+  necesidad Necesidad          @relation(fields: [necesidadId], references: [id], onDelete: Cascade)
+
+  @@id([proyectoId, necesidadId])
+}
+
+// Obra "Ayvu" de un artista local que reemplaza el logo del edificio durante
+// un período determinado. "Ayvu" en Guaraní es la palabra creadora primordial.
+model Ayvu {
+  id           Int             @id @default(autoincrement())
+  titulo       String
+  descripcion  String?
+  artista      String
+  tipo_archivo TipoArchivoAyvu
+  url_archivo  String
+  logo_target  LogoTargetAyvu  @default(CIRCULAR)
+  activo       Boolean         @default(true)
+  fecha_inicio DateTime?
+  fecha_fin    DateTime?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+}
+
+// Catálogo de tipos de evento, administrable desde el panel de secretaría.
+// Era un enum de Prisma; se convirtió en tabla porque la lista crece y cada valor
+// no tiene ninguna rama propia en el código: sólo un nombre, un par de colores y
+// —Etapa 3 del flyer— su arte. Ver docs/superpowers/specs/2026-08-12-flyer-automatico-design.md
+//
+// La relación con Evento.tipo_evento es POR CÓDIGO y sin foreign key: una FK
+// obligaría a SQLite a reescribir la tabla Evento entera. La validación vive en
+// JS (utils/tiposEvento.js), mismo criterio que DOC_TIPOS/AVISO_TIPOS.
+model TipoEvento {
+  id             Int      @id @default(autoincrement())
+  // NUNCA se edita: es la clave que referencia Evento.tipo_evento, y no hay FK
+  // que arrastre un rename.
+  codigo         String   @unique
+  nombre         String
+  activo         Boolean  @default(true)
+  // NO hay `orden` ni colores. El orden es alfabético en todas las vistas: con
+  // ~24 tipos, un orden manual es una columna más que mantener para un problema
+  // que el alfabético ya resuelve. Los colores eran el par del gradiente del
+  // fondo del flyer, y dejaron de hacer falta cuando cada tipo pasó a tener sus
+  // tres plantillas: el gradiente sigue existiendo como red (un tipo sin arte
+  // tiene que renderizar algo igual) pero usa el par institucional de
+  // utils/flyerLayout.js, no uno por tipo.
+  creado_en      DateTime @default(now())
+  actualizado_en DateTime @updatedAt
+}
+
+// ── Sorteo del aniversario (QR público + pantalla de sorteo) ──────────────────
+//
+// Circuito de una sola noche: la gente escanea un QR de la cartelería, se anota
+// y se lleva un número; la secretaría sortea los premios desde una pantalla
+// proyectada. Ver el apartado "Sorteo del aniversario" en CLAUDE.md.
+//
+// TRES TABLAS NUEVAS Y NINGUNA COLUMNA EN TABLAS EXISTENTES, a propósito: así la
+// migración es un CREATE TABLE puro y no puede disparar el RedefineTables que
+// este repo evita sobre `Evento` (ver la migración de `alcance`). El tope de
+// números tampoco es una columna: vive en ConfiguracionCircuito bajo SORTEO_TOPE,
+// con whitelist propia en routes/sorteo.js — cero migración para un entero.
+
+model SorteoParticipante {
+  id       Int    @id @default(autoincrement())
+  // El número asignado, 1..tope. `@unique` es LA INVARIANTE del feature. La cola
+  // en proceso (utils/sorteo.js) es el mecanismo que evita la colisión entre 150
+  // personas escaneando a la vez; esto es lo que la ataja igual si el mecanismo
+  // se refactoriza mal, si mañana hay dos instancias o si alguien inserta a
+  // mano. Nunca se edita: el número ya se le mandó por correo.
+  numero   Int    @unique
+  nombre   String
+  apellido String
+  // LA IDENTIDAD. Se guarda sólo dígitos (7 u 8): `20.123.456` y `20123456` son
+  // la misma persona, y de eso depende que el segundo escaneo le devuelva su
+  // número en vez de darle otro. Normalizado por `normalizarDni()`.
+  dni      String @unique
+  // NO es `@unique` a propósito: una pareja, o un padre y su hijo/a, comparten
+  // casilla, y un unique acá le niega el número a una persona real. La identidad
+  // es el DNI.
+  email    String
+
+  // Con 150 correos saliendo en goteo por una casilla compartida, "a quién le
+  // llegó" es la pregunta que el operador va a hacer. `null` = todavía en la
+  // cola de envío, o falló.
+  mail_enviado_en DateTime?
+  creado_en       DateTime  @default(now())
+
+  // NO puede ganar un premio, pero SIGUE ANOTADO con su número de siempre.
+  // El caso real: el equipo probó el formulario antes de la fiesta y no puede
+  // ganarse un premio delante de la gente que sí vino de afuera.
+  //
+  // Es un booleano y no un DELETE de la fila, a propósito: borrar liberaría el
+  // número (`numerosLibres` sólo mira lo que existe) y se lo podría llevar
+  // otra persona — el número ya viaja en un correo con ese nombre. Con el
+  // booleano el número queda quemado en el pool, tal como el resto de las
+  // decisiones "reservar cuesta menos que reparar" de este archivo (ver
+  // `numeroLibre`).
+  //
+  // NO se excluye filtrando por email/dominio: hoy es "el equipo probando",
+  // mañana puede ser cualquier otro motivo, y automatizarlo dejaría a alguien
+  // afuera —o adentro— sin que nadie lo haya decidido a propósito. Es un
+  // botón, uno por vez.
+  excluido Boolean @default(false)
+
+  resultados SorteoResultado[]
+}
+
+model SorteoPremio {
+  id             Int      @id @default(autoincrement())
+  nombre         String
+  detalle        String?
+  // Posición en la secuencia de la noche. Se reescribe ENTERA al reordenar (ver
+  // `reordenarPremios`): un swap de a pares con un doble click deja un orden que
+  // nadie pidió.
+  orden          Int
+  creado_en      DateTime @default(now())
+  actualizado_en DateTime @updatedAt
+
+  // ── Lo que se ve en la pared ───────────────────────────────────────────────
+  //
+  // La foto del producto, que en el modo presentación va de FONDO oscurecida, y
+  // el auspiciante que dona el premio (logo circular + "Cortesía de X").
+  //
+  // Las dos imágenes se suben por su propio endpoint y no por el POST/PUT del
+  // premio: el archivo se guarda bajo el ID, así que el premio tiene que existir
+  // antes. Acá se guarda la RUTA RELATIVA que sirve Express (ver
+  // utils/sorteoArchivo.js), igual que `Evento.imagen_vertical`.
+  //
+  // Los tres son opcionales A PROPÓSITO: un premio incompleto se avisa fuerte en
+  // la lista pero NUNCA traba el sorteo. Trabar el botón delante de 150 personas
+  // porque falta un logo es peor que mostrar el degradado de siempre.
+  imagen_producto  String?
+  // Cuánto hay que oscurecer ESA foto para que el texto blanco se lea encima.
+  // Se MIDE al subirla (utils/contraste.js) en vez de fijar un número: una foto
+  // de producto sobre fondo blanco deja el número ilegible con el velo que le
+  // sobra a una nocturna. Mismo criterio —y la misma aritmética— que el velo de
+  // las plantillas de flyer. Se persiste porque pertenece a esa imagen: medirlo
+  // al leer obligaría a abrir el archivo con sharp en un endpoint que la
+  // pantalla pollea cada 20 s.
+  imagen_velo      Float?
+  auspiciante      String?
+  auspiciante_logo String?
+
+  // 1:1 — un premio se sortea UNA vez. NO hay un `entregado Boolean`: el
+  // booleano y la fila serían dos fuentes de verdad del mismo hecho, y
+  // desincronizarlas es el bug clásico del deshacer.
+  resultado SorteoResultado?
+}
+
+model SorteoResultado {
+  id              Int @id @default(autoincrement())
+  participante_id Int
+  // `@unique`: la garantía de que un premio no se sortea dos veces vive en la
+  // BASE, no en el handler. Un doble click en «Sortear» frente a 150 personas no
+  // puede depender de que el front esté bien.
+  premio_id       Int @unique
+
+  // EL ÚNICO DATO CONGELADO. La lista de premios es editable durante la noche, y
+  // renombrar un premio ya sorteado no puede reescribir el historial que está
+  // proyectado en la pared. El ganador, en cambio, NO se congela: la fila del
+  // participante es inmutable (ningún endpoint la edita), así que el include
+  // dice siempre la verdad.
+  premio_nombre String
+  creado_en     DateTime @default(now())
+
+  participante SorteoParticipante @relation(fields: [participante_id], references: [id], onDelete: Cascade)
+  // SIN cascada: borrar un premio ya sorteado tiene que fallar. El handler
+  // responde 409 antes (mismo criterio que el DELETE del tarifario) y esto es el
+  // respaldo si alguien lo borra por otra puerta.
+  premio       SorteoPremio       @relation(fields: [premio_id], references: [id], onDelete: Restrict)
+
+  @@index([participante_id])
+}
